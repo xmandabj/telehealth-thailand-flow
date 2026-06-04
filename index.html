@@ -150,6 +150,10 @@
       <i class="ti ti-timeline-event" aria-hidden="true"></i>
       <span>Lalamove Token Sequence<small>ลำดับการขอ token สำเร็จ / ล้มเหลว</small></span>
     </button>
+    <button class="tab" data-tab="tech">
+      <i class="ti ti-plug-connected" aria-hidden="true"></i>
+      <span>Technical Flow (KTB)<small>wash account implementation</small></span>
+    </button>
   </nav>
 
   <main class="content">
@@ -222,6 +226,31 @@
 </div>
 
 <div id="seq"></div>
+
+</div>
+    </section>
+
+    <!-- ============ TAB 3: TECHNICAL FLOW (KTB) ============ -->
+    <section class="panel" id="panel-tech">
+      <h2 class="title">Technical Flow — Wash account implementation (KTB)</h2>
+      <p class="subtitle">สถาปัตยกรรม + ศัพท์เทคนิคสำหรับคุยกับทีม integration ของ KTB — คลิกแต่ละ stage เพื่อดูรายละเอียด</p>
+
+<h2 class="sr-only">Technical implementation flow ของ wash account ฝั่ง KTB: collection, validation, split disbursement, delivery token, reconciliation, refund พร้อม non-functional requirements</h2>
+
+<div style="padding:1rem 0;">
+
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+    <span style="font-size:13px; color:var(--color-text-secondary);">โหมด integration:</span>
+    <button id="mode-api" style="font-size:13px; border:2px solid var(--color-border-info);"><i class="ti ti-bolt" style="font-size:15px; vertical-align:-2px; margin-right:4px;" aria-hidden="true"></i>Open API (real-time)</button>
+    <button id="mode-file" style="font-size:13px;"><i class="ti ti-file-stack" style="font-size:15px; vertical-align:-2px; margin-right:4px;" aria-hidden="true"></i>Host-to-Host / File (batch)</button>
+  </div>
+
+  <div id="pipeline"></div>
+
+  <div id="stage-detail" style="margin-top:6px;"></div>
+
+  <p style="font-size:14px; font-weight:600; margin:1.75rem 0 10px; color:var(--color-text-primary);">Cross-cutting / NFR ที่ KTB จะถาม</p>
+  <div id="nfr" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px;"></div>
 
 </div>
     </section>
@@ -415,6 +444,143 @@ document.getElementById('btn-play').addEventListener('click', () => {
 });
 
 render();
+</script>
+
+<!-- ============ SCRIPT: TECHNICAL FLOW (KTB) ============ -->
+<script>
+(function(){
+  const C = {
+    in:    {c:'#378ADD', light:'#E7F0FB', dark:'#1E5FA9'},
+    check: {c:'#1D9E75', light:'#E1F5EE', dark:'#0F6E56'},
+    split: {c:'#D85A30', light:'#FAECE7', dark:'#993C1D'},
+    token: {c:'#534AB7', light:'#EEEDFE', dark:'#3C3489'},
+    recon: {c:'#888780', light:'#F1EFE8', dark:'#444441'},
+    refund:{c:'#EF9F27', light:'#FCF1DC', dark:'#854F0B'},
+  };
+
+  // rail text varies by integration mode (api | file)
+  const stages = [
+    { key:'collect', step:'1', color:C.in, icon:'ti-qrcode',
+      title:'Collection — เงินเข้า',
+      timing:'real-time',
+      product:'Thai QR Payment (Tag 30 Bill Payment) / PromptPay',
+      rail:{ api:'Payment Confirmation Webhook (push) + Slip Verification API', file:'EOD collection file (ITMX format) → poll & match' },
+      terms:['Biller ID','Ref1 = order_id','Ref2 = customer_id','HMAC / signature','Idempotency key','Dedup'] },
+
+    { key:'validate', step:'2', color:C.check, icon:'ti-checks',
+      title:'Validation / Matching',
+      timing:'real-time',
+      product:'Telehealth core (rule + ledger)',
+      rail:{ api:'sync validate → ACCEPT / REJECT', file:'batch matching engine' },
+      terms:['Ref1/Ref2 matching','Amount match','Duplicate check','state PENDING → PAID'] },
+
+    { key:'split', step:'3', color:C.split, icon:'ti-arrows-split-2',
+      title:'Split / Disbursement — เงินออก',
+      timing:'mixed (ค่าส่ง ทันที · ค่ายา T+1)',
+      product:'KTB iPay Direct (ทันที) + KTB iPay Standard (T+1)',
+      rail:{ api:'Fund Transfer API · KTB→KTB book transfer / PromptPay-ORFT (ค่าส่ง) · SMART Credit (ค่ายา)', file:'Host-to-Host (H2H) bulk file → SMART Credit batch (T+1)' },
+      terms:['Splitting rule engine','Direct Credit','Bulk Payment','Beneficiary accounts'] },
+
+    { key:'token', step:'4', color:C.token, icon:'ti-truck-delivery',
+      title:'Delivery Token (Lalamove)',
+      timing:'real-time (หลัง split ค่าส่ง)',
+      product:'Lalamove API',
+      rail:{ api:'get quotation → request token → place order → assign rider', file:'— (real-time เท่านั้น)' },
+      terms:['Idempotent retry 2–3×','Backoff','DELIVERY_FAILED → refund'] },
+
+    { key:'recon', step:'5', color:C.recon, icon:'ti-report-analytics',
+      title:'Reconciliation & Settlement',
+      timing:'EOD / T+1',
+      product:'e-Statement',
+      rail:{ api:'Statement API (pull)', file:'ISO 20022 camt.053 / MT940 file' },
+      terms:['3-way reconciliation','Reconciliation break','Settlement cut-off'] },
+
+    { key:'refund', step:'6', color:C.refund, icon:'ti-arrow-back-up',
+      title:'Refund',
+      timing:'on failure',
+      product:'PromptPay proxy / Bulk Credit',
+      rail:{ api:'Fund Transfer API (PromptPay proxy)', file:'refund batch (SMART Credit)' },
+      terms:['Reversal','Partial refund','Idempotency'] },
+  ];
+
+  const nfrs = [
+    { icon:'ti-shield-lock', color:'#1D9E75', title:'Security',
+      items:['OAuth2 client-credentials / mTLS','Message signing','IP allowlist','Field-level encryption'] },
+    { icon:'ti-refresh',     color:'#378ADD', title:'Reliability',
+      items:['Idempotency','Retry + timeout','Webhook at-least-once + dedup'] },
+    { icon:'ti-gavel',       color:'#854F0B', title:'Compliance',
+      items:['PDPA','PCI-DSS (ถ้ามี card)','Immutable audit log'] },
+    { icon:'ti-tool',        color:'#534AB7', title:'Ops',
+      items:['Sandbox / UAT env','SLA','Settlement cut-off time'] },
+  ];
+
+  let mode = 'api';
+  let active = 'collect';
+
+  function renderPipeline(){
+    const wrap = document.getElementById('pipeline');
+    let h = '';
+    stages.forEach((s, i) => {
+      const on = s.key === active;
+      h += '<button data-stage="'+s.key+'" style="'
+        + 'display:flex; align-items:center; gap:12px; width:100%; text-align:left;'
+        + 'background:var(--color-background-primary); padding:11px 13px; margin-bottom:8px;'
+        + 'border-radius:var(--border-radius-lg);'
+        + 'border:'+(on ? '2px solid '+s.color.c : '0.5px solid var(--color-border-tertiary)')+';">'
+        + '<div style="width:32px; height:32px; border-radius:8px; background:'+s.color.light+'; display:flex; align-items:center; justify-content:center; flex-shrink:0;">'
+        + '<i class="ti '+s.icon+'" style="font-size:18px; color:'+s.color.dark+';" aria-hidden="true"></i></div>'
+        + '<div style="flex:1; min-width:0;">'
+        + '<span style="font-size:14px; font-weight:500; color:var(--color-text-primary);">'+s.step+'. '+s.title+'</span>'
+        + '<div style="font-size:12px; color:var(--color-text-secondary); margin-top:1px;">'+s.product+'</div></div>'
+        + '<span style="font-size:11px; font-weight:500; color:'+s.color.dark+'; background:'+s.color.light+'; padding:3px 8px; border-radius:20px; white-space:nowrap;">'+s.timing+'</span>'
+        + '</button>';
+      if (i < stages.length-1){
+        h += '<div style="text-align:center; color:var(--color-text-tertiary); line-height:0; margin:-2px 0 6px;"><i class="ti ti-chevron-down" style="font-size:16px;" aria-hidden="true"></i></div>';
+      }
+    });
+    wrap.innerHTML = h;
+    wrap.querySelectorAll('[data-stage]').forEach(b =>
+      b.addEventListener('click', () => { active = b.getAttribute('data-stage'); renderPipeline(); renderDetail(); }));
+  }
+
+  function renderDetail(){
+    const s = stages.find(x => x.key === active);
+    const chips = s.terms.map(t =>
+      '<span style="font-size:12px; background:var(--color-background-tertiary); color:var(--color-text-primary); padding:4px 10px; border-radius:6px; font-family:var(--font-sans);">'+t+'</span>').join('');
+    document.getElementById('stage-detail').innerHTML =
+      '<div style="background:'+s.color.light+'; border-radius:var(--border-radius-lg); padding:14px 16px;">'
+      + '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">'
+      + '<i class="ti '+s.icon+'" style="font-size:18px; color:'+s.color.dark+';" aria-hidden="true"></i>'
+      + '<span style="font-size:15px; font-weight:600; color:'+s.color.dark+';">'+s.title+'</span></div>'
+      + '<div style="font-size:13px; color:var(--color-text-primary); margin-bottom:4px;"><b>KTB product:</b> '+s.product+'</div>'
+      + '<div style="font-size:13px; color:var(--color-text-primary); margin-bottom:10px;"><b>Rail / protocol:</b> '+s.rail[mode]+'</div>'
+      + '<div style="display:flex; flex-wrap:wrap; gap:6px;">'+chips+'</div>'
+      + '</div>';
+  }
+
+  function renderNfr(){
+    document.getElementById('nfr').innerHTML = nfrs.map(n =>
+      '<div style="background:var(--color-background-primary); border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-lg); padding:12px 14px;">'
+      + '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">'
+      + '<i class="ti '+n.icon+'" style="font-size:17px; color:'+n.color+';" aria-hidden="true"></i>'
+      + '<span style="font-size:14px; font-weight:600;">'+n.title+'</span></div>'
+      + '<ul style="margin:0; padding-left:18px; font-size:12.5px; color:var(--color-text-secondary); line-height:1.7;">'
+      + n.items.map(i => '<li>'+i+'</li>').join('') + '</ul></div>').join('');
+  }
+
+  function setMode(m){
+    mode = m;
+    document.getElementById('mode-api').style.border  = m==='api'  ? '2px solid var(--color-border-info)' : '0.5px solid var(--color-border-secondary)';
+    document.getElementById('mode-file').style.border = m==='file' ? '2px solid var(--color-border-info)' : '0.5px solid var(--color-border-secondary)';
+    renderDetail();
+  }
+  document.getElementById('mode-api').addEventListener('click', () => setMode('api'));
+  document.getElementById('mode-file').addEventListener('click', () => setMode('file'));
+
+  renderPipeline();
+  renderDetail();
+  renderNfr();
+})();
 </script>
 
 </body>
